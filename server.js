@@ -1,44 +1,41 @@
-import express from "express";
-import cors from "cors";
-import { spawn } from "child_process";
-import path from "path";
-import fs from "fs";
+app.get("/convert", async (req, res) => {
+  try {
+    const videoUrl = req.query.url;
+    if (!videoUrl) {
+      return res.json({ success: false, error: "Missing URL" });
+    }
 
-const app = express();
-app.use(cors());
-app.use(express.json());
+    console.log("🔥 Requested:", videoUrl);
 
-const VIDEO_DIR = path.join(process.cwd(), "videos");
-if (!fs.existsSync(VIDEO_DIR)) fs.mkdirSync(VIDEO_DIR);
+    const ytdl = require("@distube/ytdl-core");
 
-app.post("/convert", async (req, res) => {
-  const { url } = req.body;
+    if (ytdl.validateURL(videoUrl)) {
+      const info = await ytdl.getInfo(videoUrl);
+      const format = ytdl.chooseFormat(info.formats, { quality: "highest" });
 
-  if (!url) return res.json({ error: "No URL provided" });
+      return res.json({
+        success: true,
+        source: "youtube",
+        videoUrl: format.url
+      });
+    }
 
-  const output = path.join(VIDEO_DIR, `video_${Date.now()}.mp4`);
 
-  console.log("🎬 Converting:", url);
+    if (videoUrl.includes(".m3u8")) {
+      return res.json({
+        success: true,
+        source: "m3u8",
+        videoUrl
+      });
+    }
 
-  const ffmpeg = spawn("ffmpeg", [
-    "-i", url,
-    "-c", "copy",
-    output
-  ]);
-
-  ffmpeg.stderr.on("data", (d) => console.log(d.toString()));
-
-  ffmpeg.on("close", () => {
-    console.log("✔ Conversion done:", output);
-
-    res.json({
+    return res.json({
       success: true,
-      mp4: `/videos/${path.basename(output)}`
+      source: "direct",
+      videoUrl
     });
-  });
+  } catch (err) {
+    console.log("❌ ERROR:", err);
+    res.json({ success: false, error: err.toString() });
+  }
 });
-
-app.use("/videos", express.static(VIDEO_DIR));
-
-const PORT = process.env.PORT || 5000;
-app.listen(PORT, () => console.log("🌐 Cloud Downloader running on port", PORT));

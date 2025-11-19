@@ -46,15 +46,20 @@ app.get("/convert", async (req, res) => {
       const text = await fetchText(videoUrl);
       const lines = text.split("\n");
 
-      // detect child playlists
+      // FIX #1 — detect child playlists with params
       const variantPlaylists = lines.filter((l) =>
-        l.trim().endsWith(".m3u8")
+        /\.(m3u8)(\?|$)/.test(l.trim())
       );
 
+      console.log("🎞 Variant playlists found:", variantPlaylists.length);
+
+      // FIX #2 — resolve child playlist URL properly
       const playlistToParse =
         variantPlaylists.length > 0
           ? buildChildUrl(videoUrl, variantPlaylists[variantPlaylists.length - 1])
           : videoUrl;
+
+      console.log("➡ Final playlist to parse:", playlistToParse);
 
       const playlistText = await fetchText(playlistToParse);
       const playlistLines = playlistText.split("\n");
@@ -89,55 +94,63 @@ app.get("/convert", async (req, res) => {
 });
 
 /* ======================================================
-   HELPERS
+   HELPERS (FIXED)
 ====================================================== */
 
+// FIX #2a — Proper child playlist URL resolution
 function buildChildUrl(masterUrl, childLine) {
-  if (childLine.startsWith("http")) return childLine;
-  const base = masterUrl.split("/").slice(0, -1).join("/");
-  const childUrl = `${base}/${childLine}`;
-  console.log("➡ Child playlist:", childUrl);
-  return childUrl;
+  try {
+    const resolved = new URL(childLine.trim(), masterUrl).toString();
+    console.log("➡ Child playlist:", resolved);
+    return resolved;
+  } catch (e) {
+    console.log("❌ Failed resolving child URL:", e);
+    return masterUrl;
+  }
+}
+
+// FIX #3 — resolve segments USING URL()
+function resolveUrl(baseUrl, file) {
+  try {
+    return new URL(file.trim(), baseUrl).toString();
+  } catch {
+    const base = baseUrl.split("/").slice(0, -1).join("/");
+    return `${base}/${file}`;
+  }
 }
 
 function extractSegments(baseUrl, lines) {
-  const base = baseUrl.split("/").slice(0, -1).join("/");
-
   const segments = [];
 
   for (let i = 0; i < lines.length; i++) {
     const line = lines[i].trim();
 
-    // match TS segments
+    // TS segments
     if (line.endsWith(".ts")) {
-      segments.push(resolveUrl(base, line));
+      segments.push(resolveUrl(baseUrl, line));
     }
 
-    // PHN / XV style segments: .mp4 chunks, .m4s, .chunk
+    // m4s, mp4 chunks, etc
     if (
       line.endsWith(".m4s") ||
       line.endsWith(".mp4") ||
       line.endsWith(".cmfv") ||
       line.endsWith(".chunk")
     ) {
-      segments.push(resolveUrl(base, line));
+      segments.push(resolveUrl(baseUrl, line));
     }
 
-    // EXTINF lines: next line is segment file
+    // EXTINF → next line is a segment
     if (line.startsWith("#EXTINF")) {
       const next = lines[i + 1]?.trim();
       if (next && !next.startsWith("#")) {
-        segments.push(resolveUrl(base, next));
+        segments.push(resolveUrl(baseUrl, next));
       }
     }
   }
 
   console.log("📦 Extracted segments:", segments.length);
   return segments;
-}
-
-function resolveUrl(base, file) {
-  return file.startsWith("http") ? file : `${base}/${file}`;
 }
 
 /* ======================================================

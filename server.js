@@ -1,66 +1,63 @@
-import express from "express";
-import cors from "cors";
-import ytdl from "@distube/ytdl-core";
-
-const app = express();
-app.use(cors());
-app.use(express.json());
-
-// 🧪 ROOT CHECK
-app.get("/", (req, res) => {
-  res.send("Cloud Downloader API is running!");
-});
-
-/* ======================================================
-   🔥 /convert — universal video extractor
-   Works for: YouTube, m3u8, HLS, direct MP4
-====================================================== */
-
 app.get("/convert", async (req, res) => {
   try {
     const videoUrl = req.query.url;
-    if (!videoUrl) {
-      return res.json({ success: false, error: "Missing url parameter" });
-    }
+    if (!videoUrl) return res.json({ success: false, error: "Missing url parameter" });
 
     console.log("🔥 Extract request:", videoUrl);
 
-    // ---- YOUTUBE SUPPORT ----
+    /* ============================================
+       1️⃣ YOUTUBE MP4 (KEEP SAME)
+    ============================================ */
     if (ytdl.validateURL(videoUrl)) {
-      console.log("🎬 YouTube URL detected");
-
+      console.log("🎬 YouTube detected");
       const info = await ytdl.getInfo(videoUrl);
-
-      // get highest quality MP4 stream
       const format = ytdl.chooseFormat(info.formats, { quality: "highestvideo" });
-
-      if (!format || !format.url) {
-        return res.json({
-          success: false,
-          error: "Failed to extract MP4 stream"
-        });
-      }
 
       return res.json({
         success: true,
         source: "youtube",
+        quality: format.qualityLabel,
         videoUrl: format.url
       });
     }
 
-    // ---- M3U8 / HLS SUPPORT ----
-    if (videoUrl.includes(".m3u8") || videoUrl.includes("master.m3u8")) {
-      console.log("📡 HLS/m3u8 stream detected");
+    /* ============================================
+       2️⃣ HLS (.m3u8) SUPPORT — RETURN SEGMENT LIST
+    ============================================ */
+    if (videoUrl.includes(".m3u8")) {
+      console.log("📡 HLS detected:", videoUrl);
+
+      const m3u8Text = await fetch(videoUrl).then(r => r.text());
+
+      // Extract TS segments
+      const lines = m3u8Text.split("\n");
+      const segments = lines.filter(l => l.endsWith(".ts"));
+
+      if (segments.length === 0) {
+        return res.json({
+          success: false,
+          error: "No .ts segments found"
+        });
+      }
+
+      // Convert relative paths → full URL
+      const base = videoUrl.split("index.m3u8")[0]
+        || videoUrl.split("master.m3u8")[0]
+        || videoUrl.substring(0, videoUrl.lastIndexOf("/") + 1);
+
+      const fullSegments = segments.map(s => base + s);
 
       return res.json({
         success: true,
-        source: "m3u8",
-        videoUrl
+        source: "hls",
+        totalSegments: fullSegments.length,
+        segments: fullSegments
       });
     }
 
-    // ---- DIRECT MP4 / WEB STREAM ----
-    console.log("➡ Direct video stream");
+    /* ============================================
+       3️⃣ DIRECT VIDEO (MP4, WEBM…)
+    ============================================ */
     return res.json({
       success: true,
       source: "direct",
@@ -74,13 +71,4 @@ app.get("/convert", async (req, res) => {
       error: err.toString()
     });
   }
-});
-
-/* ======================================================
-   🚀 START SERVER
-====================================================== */
-
-const PORT = process.env.PORT || 10000;
-app.listen(PORT, () => {
-  console.log(`🌐 Cloud Downloader API running at port ${PORT}`);
 });

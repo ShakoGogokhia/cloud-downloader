@@ -1,51 +1,75 @@
+import express from "express";
+import cors from "cors";
+import ytdl from "@distube/ytdl-core";
+import fetch from "node-fetch";
+
+const app = express();
+app.use(cors());
+app.use(express.json());
+
+app.get("/", (req, res) => {
+  res.send("Cloud Downloader API is running!");
+});
+
+/* ======================================================
+   🔥 /convert — universal extractor
+   - YouTube → highest MP4
+   - Direct MP4
+   - M3U8 → segment list
+====================================================== */
+
 app.get("/convert", async (req, res) => {
   try {
     const videoUrl = req.query.url;
-    if (!videoUrl) return res.json({ success: false, error: "Missing url parameter" });
+    if (!videoUrl) {
+      return res.json({ success: false, error: "Missing url parameter" });
+    }
 
     console.log("🔥 Extract request:", videoUrl);
 
-    /* ============================================
-       1️⃣ YOUTUBE MP4 (KEEP SAME)
-    ============================================ */
+    /* ---------- YOUTUBE ---------- */
     if (ytdl.validateURL(videoUrl)) {
       console.log("🎬 YouTube detected");
+
       const info = await ytdl.getInfo(videoUrl);
-      const format = ytdl.chooseFormat(info.formats, { quality: "highestvideo" });
+
+      const format = ytdl.chooseFormat(info.formats, {
+        quality: "highestvideo",
+        filter: "videoandaudio"
+      });
 
       return res.json({
         success: true,
         source: "youtube",
-        quality: format.qualityLabel,
         videoUrl: format.url
       });
     }
 
-    /* ============================================
-       2️⃣ HLS (.m3u8) SUPPORT — RETURN SEGMENT LIST
-    ============================================ */
+    /* ---------- HLS / M3U8 ---------- */
     if (videoUrl.includes(".m3u8")) {
-      console.log("📡 HLS detected:", videoUrl);
+      console.log("📡 M3U8 detected");
 
-      const m3u8Text = await fetch(videoUrl).then(r => r.text());
+      const playlist = await fetch(videoUrl).then(r => r.text());
 
-      // Extract TS segments
-      const lines = m3u8Text.split("\n");
-      const segments = lines.filter(l => l.endsWith(".ts"));
+      // extract .ts segments
+      const segments = playlist
+        .split("\n")
+        .filter(line => line.endsWith(".ts"));
 
       if (segments.length === 0) {
         return res.json({
           success: false,
-          error: "No .ts segments found"
+          error: "No TS segments found in m3u8"
         });
       }
 
-      // Convert relative paths → full URL
-      const base = videoUrl.split("index.m3u8")[0]
-        || videoUrl.split("master.m3u8")[0]
-        || videoUrl.substring(0, videoUrl.lastIndexOf("/") + 1);
+      // build full URLs
+      const baseUrl = videoUrl.split("/").slice(0, -1).join("/");
 
-      const fullSegments = segments.map(s => base + s);
+      const fullSegments = segments.map(seg => {
+        if (seg.startsWith("http")) return seg;
+        return baseUrl + "/" + seg;
+      });
 
       return res.json({
         success: true,
@@ -55,9 +79,7 @@ app.get("/convert", async (req, res) => {
       });
     }
 
-    /* ============================================
-       3️⃣ DIRECT VIDEO (MP4, WEBM…)
-    ============================================ */
+    /* ---------- DIRECT MP4 ---------- */
     return res.json({
       success: true,
       source: "direct",
@@ -66,9 +88,14 @@ app.get("/convert", async (req, res) => {
 
   } catch (err) {
     console.log("❌ ERROR:", err);
-    return res.json({
+    res.json({
       success: false,
       error: err.toString()
     });
   }
 });
+
+const PORT = process.env.PORT || 10000;
+app.listen(PORT, () =>
+  console.log(`🌐 Cloud Downloader API running at port ${PORT}`)
+);

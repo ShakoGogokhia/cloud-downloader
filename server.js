@@ -1,40 +1,15 @@
-import express from "express";
-import cors from "cors";
-import ytdl from "@distube/ytdl-core";
-import fetch from "node-fetch";
-
-const app = express();
-app.use(cors());
-app.use(express.json());
-
-app.get("/", (req, res) => {
-  res.send("Cloud Downloader API is running!");
-});
-
-/* ======================================================
-   🔥 /convert — universal extractor
-   - YouTube → MP4
-   - Direct MP4
-   - M3U8 → segment list
-====================================================== */
-
 app.get("/convert", async (req, res) => {
   try {
     const videoUrl = req.query.url;
-    const wantSegments = req.query.segments === "1";
-
     if (!videoUrl) {
       return res.json({ success: false, error: "Missing url parameter" });
     }
 
-    console.log("🔥 Extract request:", videoUrl);
+    console.log("🔥 Extract:", videoUrl);
 
-    /* ---------- YOUTUBE ---------- */
+    // YouTube
     if (ytdl.validateURL(videoUrl)) {
-      console.log("🎬 YouTube detected");
-
       const info = await ytdl.getInfo(videoUrl);
-
       const format = ytdl.chooseFormat(info.formats, {
         quality: "highestvideo",
         filter: "videoandaudio"
@@ -47,25 +22,52 @@ app.get("/convert", async (req, res) => {
       });
     }
 
-    /* ---------- M3U8 / HLS ---------- */
+    // ---------- HLS / M3U8 ---------- //
     if (videoUrl.includes(".m3u8")) {
       console.log("📡 M3U8 detected");
 
-      const playlist = await fetch(videoUrl).then(r => r.text());
+      const fetchPlaylist = async (url) => {
+        const text = await fetch(url).then(r => r.text());
+        return text;
+      };
 
-      // extract .ts segments
-      const segments = playlist
+      const master = await fetchPlaylist(videoUrl);
+
+      // Does not contain TS → means MASTER playlist (multiple sub-playlists)
+      const variantLines = master
         .split("\n")
-        .filter(line => line.trim().endsWith(".ts"));
+        .filter(l => l.endsWith(".m3u8"));
 
-      const baseUrl = videoUrl.split("/").slice(0, -1).join("/");
+      if (variantLines.length > 0) {
+        console.log("➡ Master playlist detected");
 
-      const fullSegments = segments.map(seg =>
-        seg.startsWith("http") ? seg : baseUrl + "/" + seg
-      );
+        // choose highest resolution child playlist
+        const child = variantLines[variantLines.length - 1];
 
-      // if user requested segments=1 → return only segments list
-      if (wantSegments) {
+        const base = videoUrl.split("/").slice(0, -1).join("/");
+        const childUrl = child.startsWith("http") ? child : base + "/" + child;
+
+        console.log("➡ Fetching child playlist:", childUrl);
+
+        const childPlaylist = await fetchPlaylist(childUrl);
+
+        const tsSegments = childPlaylist
+          .split("\n")
+          .filter(l => l.endsWith(".ts"));
+
+        if (tsSegments.length === 0) {
+          return res.json({
+            success: false,
+            error: "No TS segments found in child playlist"
+          });
+        }
+
+        const segmentBase = childUrl.split("/").slice(0, -1).join("/");
+
+        const fullSegments = tsSegments.map(seg =>
+          seg.startsWith("http") ? seg : segmentBase + "/" + seg
+        );
+
         return res.json({
           success: true,
           source: "hls",
@@ -74,15 +76,26 @@ app.get("/convert", async (req, res) => {
         });
       }
 
-      // otherwise return basic M3U8 info
+      // Normal HLS (already contains TS)
+      const tsSegments = master
+        .split("\n")
+        .filter(l => l.endsWith(".ts"));
+
+      const base = videoUrl.split("/").slice(0, -1).join("/");
+
+      const fullSegments = tsSegments.map(seg =>
+        seg.startsWith("http") ? seg : base + "/" + seg
+      );
+
       return res.json({
         success: true,
-        source: "m3u8",
-        videoUrl
+        source: "hls",
+        totalSegments: fullSegments.length,
+        segments: fullSegments
       });
     }
 
-    /* ---------- DIRECT MP4 ---------- */
+    // Direct MP4
     return res.json({
       success: true,
       source: "direct",
@@ -91,14 +104,6 @@ app.get("/convert", async (req, res) => {
 
   } catch (err) {
     console.log("❌ ERROR:", err);
-    res.json({
-      success: false,
-      error: err.toString()
-    });
+    return res.json({ success: false, error: err.toString() });
   }
 });
-
-const PORT = process.env.PORT || 10000;
-app.listen(PORT, () =>
-  console.log(`🌐 Cloud Downloader API running at port ${PORT}`)
-);

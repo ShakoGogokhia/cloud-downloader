@@ -1,3 +1,20 @@
+import express from "express";
+import cors from "cors";
+import ytdl from "@distube/ytdl-core";
+import fetch from "node-fetch";
+
+const app = express();
+app.use(cors());
+app.use(express.json());
+
+app.get("/", (req, res) => {
+  res.send("Cloud Downloader API is running!");
+});
+
+/* =======================================================
+   /convert — UNIVERSAL VIDEO EXTRACTOR
+======================================================= */
+
 app.get("/convert", async (req, res) => {
   try {
     const videoUrl = req.query.url;
@@ -5,13 +22,16 @@ app.get("/convert", async (req, res) => {
       return res.json({ success: false, error: "Missing url parameter" });
     }
 
-    console.log("🔥 Extract:", videoUrl);
+    console.log("🔥 Extract request:", videoUrl);
 
-    // YouTube
+    /* ---------- YOUTUBE ---------- */
     if (ytdl.validateURL(videoUrl)) {
+      console.log("🎬 YouTube detected");
+
       const info = await ytdl.getInfo(videoUrl);
+
       const format = ytdl.chooseFormat(info.formats, {
-        quality: "highestvideo",
+        quality: "highest",
         filter: "videoandaudio"
       });
 
@@ -22,50 +42,48 @@ app.get("/convert", async (req, res) => {
       });
     }
 
-    // ---------- HLS / M3U8 ---------- //
+    /* ---------- M3U8 / HLS ---------- */
     if (videoUrl.includes(".m3u8")) {
       console.log("📡 M3U8 detected");
 
-      const fetchPlaylist = async (url) => {
-        const text = await fetch(url).then(r => r.text());
-        return text;
-      };
+      const getPlaylist = async (url) =>
+        await fetch(url).then((res) => res.text());
 
-      const master = await fetchPlaylist(videoUrl);
+      const text = await getPlaylist(videoUrl);
 
-      // Does not contain TS → means MASTER playlist (multiple sub-playlists)
-      const variantLines = master
-        .split("\n")
-        .filter(l => l.endsWith(".m3u8"));
+      const lines = text.split("\n");
 
-      if (variantLines.length > 0) {
-        console.log("➡ Master playlist detected");
+      const variantPlaylists = lines.filter((l) =>
+        l.trim().endsWith(".m3u8")
+      );
 
-        // choose highest resolution child playlist
-        const child = variantLines[variantLines.length - 1];
+      // MASTER playlist → follow child playlist
+      if (variantPlaylists.length > 0) {
+        const child = variantPlaylists[variantPlaylists.length - 1];
 
         const base = videoUrl.split("/").slice(0, -1).join("/");
-        const childUrl = child.startsWith("http") ? child : base + "/" + child;
+        const childUrl = child.startsWith("http")
+          ? child
+          : `${base}/${child}`;
 
-        console.log("➡ Fetching child playlist:", childUrl);
+        console.log("➡ Child playlist:", childUrl);
 
-        const childPlaylist = await fetchPlaylist(childUrl);
-
-        const tsSegments = childPlaylist
+        const childText = await getPlaylist(childUrl);
+        const tsLines = childText
           .split("\n")
-          .filter(l => l.endsWith(".ts"));
+          .filter((l) => l.trim().endsWith(".ts"));
 
-        if (tsSegments.length === 0) {
+        if (tsLines.length === 0) {
           return res.json({
             success: false,
             error: "No TS segments found in child playlist"
           });
         }
 
-        const segmentBase = childUrl.split("/").slice(0, -1).join("/");
+        const childBase = childUrl.split("/").slice(0, -1).join("/");
 
-        const fullSegments = tsSegments.map(seg =>
-          seg.startsWith("http") ? seg : segmentBase + "/" + seg
+        const fullSegments = tsLines.map((ts) =>
+          ts.startsWith("http") ? ts : `${childBase}/${ts}`
         );
 
         return res.json({
@@ -76,34 +94,39 @@ app.get("/convert", async (req, res) => {
         });
       }
 
-      // Normal HLS (already contains TS)
-      const tsSegments = master
-        .split("\n")
-        .filter(l => l.endsWith(".ts"));
-
+      // DIRECT TS playlist (no variants)
+      const tsSegments = lines.filter((l) => l.trim().endsWith(".ts"));
       const base = videoUrl.split("/").slice(0, -1).join("/");
 
-      const fullSegments = tsSegments.map(seg =>
-        seg.startsWith("http") ? seg : base + "/" + seg
+      const fullSegments = tsSegments.map((ts) =>
+        ts.startsWith("http") ? ts : `${base}/${ts}`
       );
 
       return res.json({
         success: true,
         source: "hls",
-        totalSegments: fullSegments.length,
-        segments: fullSegments
+        segments: fullSegments,
+        totalSegments: fullSegments.length
       });
     }
 
-    // Direct MP4
+    /* ---------- DIRECT MP4 ---------- */
     return res.json({
       success: true,
       source: "direct",
       videoUrl
     });
-
   } catch (err) {
     console.log("❌ ERROR:", err);
     return res.json({ success: false, error: err.toString() });
   }
 });
+
+/* =======================================================
+   START SERVER
+======================================================= */
+
+const PORT = process.env.PORT || 10000;
+app.listen(PORT, () =>
+  console.log(`🌐 Cloud Downloader API running at port ${PORT}`)
+);

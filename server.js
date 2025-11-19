@@ -13,7 +13,7 @@ app.get("/", (req, res) => {
 
 /* ======================================================
    🔥 /convert — universal extractor
-   - YouTube → highest MP4
+   - YouTube → MP4
    - Direct MP4
    - M3U8 → segment list
 ====================================================== */
@@ -21,6 +21,8 @@ app.get("/", (req, res) => {
 app.get("/convert", async (req, res) => {
   try {
     const videoUrl = req.query.url;
+    const wantSegments = req.query.segments === "1";
+
     if (!videoUrl) {
       return res.json({ success: false, error: "Missing url parameter" });
     }
@@ -45,7 +47,7 @@ app.get("/convert", async (req, res) => {
       });
     }
 
-    /* ---------- HLS / M3U8 ---------- */
+    /* ---------- M3U8 / HLS ---------- */
     if (videoUrl.includes(".m3u8")) {
       console.log("📡 M3U8 detected");
 
@@ -54,28 +56,29 @@ app.get("/convert", async (req, res) => {
       // extract .ts segments
       const segments = playlist
         .split("\n")
-        .filter(line => line.endsWith(".ts"));
+        .filter(line => line.trim().endsWith(".ts"));
 
-      if (segments.length === 0) {
+      const baseUrl = videoUrl.split("/").slice(0, -1).join("/");
+
+      const fullSegments = segments.map(seg =>
+        seg.startsWith("http") ? seg : baseUrl + "/" + seg
+      );
+
+      // if user requested segments=1 → return only segments list
+      if (wantSegments) {
         return res.json({
-          success: false,
-          error: "No TS segments found in m3u8"
+          success: true,
+          source: "hls",
+          segments: fullSegments,
+          totalSegments: fullSegments.length
         });
       }
 
-      // build full URLs
-      const baseUrl = videoUrl.split("/").slice(0, -1).join("/");
-
-      const fullSegments = segments.map(seg => {
-        if (seg.startsWith("http")) return seg;
-        return baseUrl + "/" + seg;
-      });
-
+      // otherwise return basic M3U8 info
       return res.json({
         success: true,
-        source: "hls",
-        totalSegments: fullSegments.length,
-        segments: fullSegments
+        source: "m3u8",
+        videoUrl
       });
     }
 

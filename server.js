@@ -50,16 +50,13 @@ app.get("/convert", async (req, res) => {
         await fetch(url).then((res) => res.text());
 
       const text = await getPlaylist(videoUrl);
-
       const lines = text.split("\n");
 
-      const variantPlaylists = lines.filter((l) =>
-        l.trim().endsWith(".m3u8")
-      );
+      // detect child playlists
+      const variants = lines.filter((l) => l.trim().endsWith(".m3u8"));
 
-      // MASTER playlist → follow child playlist
-      if (variantPlaylists.length > 0) {
-        const child = variantPlaylists[variantPlaylists.length - 1];
+      if (variants.length > 0) {
+        const child = variants[variants.length - 1];
 
         const base = videoUrl.split("/").slice(0, -1).join("/");
         const childUrl = child.startsWith("http")
@@ -69,6 +66,7 @@ app.get("/convert", async (req, res) => {
         console.log("➡ Child playlist:", childUrl);
 
         const childText = await getPlaylist(childUrl);
+
         const tsLines = childText
           .split("\n")
           .filter((l) => l.trim().endsWith(".ts"));
@@ -94,7 +92,7 @@ app.get("/convert", async (req, res) => {
         });
       }
 
-      // DIRECT TS playlist (no variants)
+      // direct TS playlist
       const tsSegments = lines.filter((l) => l.trim().endsWith(".ts"));
       const base = videoUrl.split("/").slice(0, -1).join("/");
 
@@ -116,6 +114,7 @@ app.get("/convert", async (req, res) => {
       source: "direct",
       videoUrl
     });
+
   } catch (err) {
     console.log("❌ ERROR:", err);
     return res.json({ success: false, error: err.toString() });

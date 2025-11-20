@@ -2,6 +2,9 @@ import express from "express";
 import cors from "cors";
 import ytdl from "@distube/ytdl-core";
 import fetch from "node-fetch";
+import { exec } from "child_process";
+import fs from "fs";
+import path from "path";
 
 const app = express();
 app.use(cors());
@@ -11,17 +14,17 @@ app.get("/", (req, res) => {
   res.send("Cloud Downloader API is running!");
 });
 
-/* =======================================================
-   UNIVERSAL VIDEO EXTRACTOR
-======================================================= */
 app.get("/convert", async (req, res) => {
   try {
     const videoUrl = req.query.url;
-    if (!videoUrl) return res.json({ success: false, error: "Missing url" });
+    if (!videoUrl)
+      return res.json({ success: false, error: "Missing url" });
 
-    console.log("\n🔥 Extract request:", videoUrl);
+    console.log("🔥 Convert request:", videoUrl);
 
-    /* ---------- YOUTUBE ---------- */
+    /* -----------------------------
+       YOUTUBE
+    ----------------------------- */
     if (ytdl.validateURL(videoUrl)) {
       console.log("🎬 YouTube detected");
 
@@ -33,55 +36,48 @@ app.get("/convert", async (req, res) => {
 
       return res.json({
         success: true,
-        source: "youtube",
+        source: "direct",
         videoUrl: format.url,
       });
     }
 
-    /* ---------- M3U8 / HLS ---------- */
+    /* -----------------------------
+       HLS / M3U8
+    ----------------------------- */
     if (videoUrl.includes(".m3u8")) {
-      console.log("📡 M3U8 detected");
+      console.log("📡 HLS detected → converting with ffmpeg");
 
-      const fetchText = async (url) => await fetch(url).then((r) => r.text());
-      const text = await fetchText(videoUrl);
-      const lines = text.split("\n");
+      const fileName = `video_${Date.now()}.mp4`;
+      const outputPath = path.join("/tmp", fileName);
 
-      // FIX #1 — detect child playlists with params
-      const variantPlaylists = lines.filter((l) =>
-        /\.(m3u8)(\?|$)/.test(l.trim())
-      );
+      const cmd = `ffmpeg -y -i "${videoUrl}" -c copy "${outputPath}"`;
 
-      console.log("🎞 Variant playlists found:", variantPlaylists.length);
+      exec(cmd, async (err) => {
+        if (err) {
+          console.log("❌ FFmpeg error:", err);
+          return res.json({ success: false, error: "FFmpeg failed" });
+        }
 
-      // FIX #2 — resolve child playlist URL properly
-      const playlistToParse =
-        variantPlaylists.length > 0
-          ? buildChildUrl(videoUrl, variantPlaylists[variantPlaylists.length - 1])
-          : videoUrl;
+        console.log("✅ MP4 created:", outputPath);
 
-      console.log("➡ Final playlist to parse:", playlistToParse);
+        // Upload file to your server (simple local HTTP server)
+        const fileBuffer = fs.readFileSync(outputPath);
+        const base64 = fileBuffer.toString("base64");
 
-      const playlistText = await fetchText(playlistToParse);
-      const playlistLines = playlistText.split("\n");
-
-      const segments = extractSegments(playlistToParse, playlistLines);
-
-      if (segments.length === 0) {
         return res.json({
-          success: false,
-          error: "No segments found",
+          success: true,
+          source: "mp4",
+          fileName,
+          base64,
         });
-      }
-
-      return res.json({
-        success: true,
-        source: "hls",
-        segments,
-        totalSegments: segments.length,
       });
+
+      return;
     }
 
-    /* ---------- DIRECT MP4 ---------- */
+    /* -----------------------------
+       DIRECT MP4
+    ----------------------------- */
     return res.json({
       success: true,
       source: "direct",
@@ -93,69 +89,6 @@ app.get("/convert", async (req, res) => {
   }
 });
 
-/* ======================================================
-   HELPERS (FIXED)
-====================================================== */
-
-// FIX #2a — Proper child playlist URL resolution
-function buildChildUrl(masterUrl, childLine) {
-  try {
-    const resolved = new URL(childLine.trim(), masterUrl).toString();
-    console.log("➡ Child playlist:", resolved);
-    return resolved;
-  } catch (e) {
-    console.log("❌ Failed resolving child URL:", e);
-    return masterUrl;
-  }
-}
-
-// FIX #3 — resolve segments USING URL()
-function resolveUrl(baseUrl, file) {
-  try {
-    return new URL(file.trim(), baseUrl).toString();
-  } catch {
-    const base = baseUrl.split("/").slice(0, -1).join("/");
-    return `${base}/${file}`;
-  }
-}
-
-function extractSegments(baseUrl, lines) {
-  const segments = [];
-
-  for (let i = 0; i < lines.length; i++) {
-    const line = lines[i].trim();
-
-    // TS segments
-    if (line.endsWith(".ts")) {
-      segments.push(resolveUrl(baseUrl, line));
-    }
-
-    // m4s, mp4 chunks, etc
-    if (
-      line.endsWith(".m4s") ||
-      line.endsWith(".mp4") ||
-      line.endsWith(".cmfv") ||
-      line.endsWith(".chunk")
-    ) {
-      segments.push(resolveUrl(baseUrl, line));
-    }
-
-    // EXTINF → next line is a segment
-    if (line.startsWith("#EXTINF")) {
-      const next = lines[i + 1]?.trim();
-      if (next && !next.startsWith("#")) {
-        segments.push(resolveUrl(baseUrl, next));
-      }
-    }
-  }
-
-  console.log("📦 Extracted segments:", segments.length);
-  return segments;
-}
-
-/* ======================================================
-   START SERVER
-====================================================== */
 const PORT = process.env.PORT || 10000;
 app.listen(PORT, () => {
   console.log(`🌐 Cloud Downloader API running at port ${PORT}`);

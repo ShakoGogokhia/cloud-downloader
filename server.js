@@ -10,6 +10,11 @@ const app = express();
 app.use(cors());
 app.use(express.json());
 
+/* ============================================================
+    SERVE VIDEO FILES DIRECTLY FOR DOWNLOAD PROGRESS
+============================================================ */
+app.use("/videos", express.static("/tmp"));
+
 app.get("/", (req, res) => {
   res.send("Cloud Downloader API is running!");
 });
@@ -22,9 +27,9 @@ app.get("/convert", async (req, res) => {
 
     console.log("🔥 Convert request:", videoUrl);
 
-    /* -----------------------------
-       YOUTUBE
-    ----------------------------- */
+    /* ============================================================
+          YOUTUBE (KEPT EXACTLY AS IT WAS)
+    ============================================================= */
     if (ytdl.validateURL(videoUrl)) {
       console.log("🎬 YouTube detected");
 
@@ -41,9 +46,9 @@ app.get("/convert", async (req, res) => {
       });
     }
 
-    /* -----------------------------
-       HLS / M3U8
-    ----------------------------- */
+    /* ============================================================
+          M3U8 / HLS (FFMPEG) → FIXED (NO BASE64 ANYMORE)
+    ============================================================= */
     if (videoUrl.includes(".m3u8")) {
       console.log("📡 HLS detected → converting with ffmpeg");
 
@@ -60,29 +65,27 @@ app.get("/convert", async (req, res) => {
 
         console.log("✅ MP4 created:", outputPath);
 
-        // Upload file to your server (simple local HTTP server)
-        const fileBuffer = fs.readFileSync(outputPath);
-        const base64 = fileBuffer.toString("base64");
-
+        // ⭐ FIX: RETURN DIRECT URL SO CLIENT CAN USE PROGRESS
         return res.json({
           success: true,
-          source: "mp4",
+          source: "direct",
+          videoUrl: `https://cloud-downloader-1.onrender.com/videos/${fileName}`,
           fileName,
-          base64,
         });
       });
 
       return;
     }
 
-    /* -----------------------------
-       DIRECT MP4
-    ----------------------------- */
+    /* ============================================================
+          DIRECT MP4 (UNCHANGED)
+    ============================================================= */
     return res.json({
       success: true,
       source: "direct",
       videoUrl,
     });
+
   } catch (err) {
     console.log("❌ ERROR:", err);
     return res.json({ success: false, error: err.toString() });
